@@ -1,0 +1,281 @@
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
+import { Link } from 'expo-router';
+import { signOut } from 'firebase/auth';
+import { onValue, ref, set } from 'firebase/database';
+import { useEffect, useState } from 'react';
+import { Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { auth, db } from '../../../firebaseConfig';
+
+// --- THÊM 2 THƯ VIỆN THÔNG BÁO ---
+import * as Device from 'expo-device';
+import * as Notifications from 'expo-notifications';
+
+// --- CÀI ĐẶT CÁCH HIỂN THỊ THÔNG BÁO ---
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    shouldShowBanner: true, // Thêm dòng này để sửa lỗi
+  } as Notifications.NotificationBehavior), // Ép kiểu cứng
+});
+
+export default function DashboardScreen() {
+  const [nhietDo, setNhietDo] = useState(0);
+  const [khoi, setKhoi] = useState(0);
+  const [bom, setBom] = useState(false);
+  const [quat, setQuat] = useState(false);
+
+  // 1. Lấy dữ liệu cảm biến từ Firebase
+  useEffect(() => {
+    const nhietDoRef = ref(db, 'sensors/nhiet_do');
+    const khoiRef = ref(db, 'sensors/khoi');
+    const bomRef = ref(db, 'relays/bom');
+    const quatRef = ref(db, 'relays/dien'); 
+
+    onValue(nhietDoRef, (snapshot) => setNhietDo(snapshot.val() || 0));
+    onValue(khoiRef, (snapshot) => setKhoi(snapshot.val() || 0));
+    onValue(bomRef, (snapshot) => setBom(snapshot.val() === 1));
+    onValue(quatRef, (snapshot) => setQuat(snapshot.val() === 1));
+  }, []);
+
+  // 2. XIN QUYỀN VÀ LẤY PUSH TOKEN (Bản fix cho APK thật)
+useEffect(() => {
+  async function dangKyThongBao() {
+    if (Device.isDevice) {
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      let finalStatus = existingStatus;
+
+      if (existingStatus !== 'granted') {
+        const { status } = await Notifications.requestPermissionsAsync();
+        finalStatus = status;
+      }
+
+      if (finalStatus !== 'granted') {
+        Alert.alert('Cảnh báo', 'Bạn cần cấp quyền thông báo để nhận cảnh báo cháy!');
+        return;
+      }
+
+      try {
+        // Lấy ID dự án
+        const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+        if (!projectId) {
+          Alert.alert("Lỗi", "Không tìm thấy Project ID trong file cấu hình.");
+          return;
+        }
+
+        // Ép lấy Token với Project ID
+        const token = (await Notifications.getExpoPushTokenAsync({
+          projectId: projectId,
+        })).data;
+
+      
+
+        // Đẩy lên Firebase
+        await set(ref(db, 'settings/pushToken'), token);
+      } catch (error: any) {
+        // NẾU LỖI, BÁO THẲNG RA MÀN HÌNH ĐIỆN THOẠI
+        Alert.alert("Lỗi lấy Token", error.message);
+      }
+    }
+  }
+
+  dangKyThongBao();
+}, []);
+
+  const toggleDevice = (devicePath: string, currentState: boolean) => {
+    set(ref(db, devicePath), currentState ? 0 : 1);
+  };
+
+  const gasPercent = Math.min(100, Math.round((khoi / 4095) * 100));
+  const isDanger = nhietDo > 50 || khoi > 2500;
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="dark-content" backgroundColor="#f8fafc" />
+      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+        
+        {/* MAIN CHARTS (Gauge) */}
+        <View style={styles.chartsContainer}>
+          {/* Cảm biến Gas */}
+          <View style={styles.chartCard}>
+            <View style={styles.gaugeContainer}>
+              <View style={styles.gaugeTrack} />
+              <View style={[styles.gaugeFill, { borderTopColor: '#3b82f6', borderLeftColor: '#3b82f6' }]} />
+              <View style={styles.gaugeContent}>
+                <MaterialCommunityIcons name="fire" size={28} color="#3b82f6" style={{marginBottom: 2}}/>
+                <Text style={styles.chartLabel}>NỒNG ĐỘ KHÍ GA</Text>
+                <Text style={styles.chartLabelSub}>(%)</Text>
+                <Text style={styles.chartValue}>{gasPercent}%</Text>
+              </View>
+            </View>
+            <View style={[styles.statusBadge, { backgroundColor: isDanger ? '#fee2e2' : '#dcfce7' }]}>
+              <Ionicons name={isDanger ? "warning" : "checkmark-circle"} size={16} color={isDanger ? "#ef4444" : "#22c55e"} />
+              <Text style={[styles.statusText, { color: isDanger ? "#ef4444" : "#22c55e" }]}>{isDanger ? "Nguy hiểm" : "Bình thường"}</Text>
+            </View>
+          </View>
+
+          {/* Cảm biến Nhiệt Độ */}
+          <View style={styles.chartCard}>
+            <View style={styles.gaugeContainer}>
+              <View style={styles.gaugeTrack} />
+              <View style={[styles.gaugeFill, { borderTopColor: '#f97316', borderLeftColor: '#f97316' }]} />
+              <View style={styles.gaugeContent}>
+                <MaterialCommunityIcons name="thermometer" size={28} color="#f97316" style={{marginBottom: 2}}/>
+                <Text style={styles.chartLabel}>NHIỆT ĐỘ</Text>
+                <Text style={styles.chartLabelSub}>(°C)</Text>
+                <Text style={styles.chartValue}>{nhietDo}°C</Text>
+              </View>
+            </View>
+            <View style={[styles.statusBadge, { backgroundColor: isDanger ? '#fee2e2' : '#dcfce7' }]}>
+              <Ionicons name={isDanger ? "warning" : "checkmark-circle"} size={16} color={isDanger ? "#ef4444" : "#22c55e"} />
+              <Text style={[styles.statusText, { color: isDanger ? "#ef4444" : "#22c55e" }]}>{isDanger ? "Nguy hiểm" : "Bình thường"}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* THÔNG TIN TRẠNG THÁI */}
+        <View style={styles.infoContainer}>
+          <View style={styles.infoCard}>
+            <View style={[styles.infoIconBg, { backgroundColor: '#eff6ff' }]}>
+              <MaterialCommunityIcons name="gas-cylinder" size={24} color="#3b82f6" />
+            </View>
+            <View style={styles.infoTextGroup}>
+              <Text style={styles.infoLabel}>Trạng thái gas</Text>
+              <View style={styles.infoValueRow}>
+                <Text style={styles.infoValue}>Còn {100 - gasPercent}%</Text>
+                <View style={[styles.dot, { backgroundColor: '#22c55e' }]} />
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.infoCard}>
+            <View style={[styles.infoIconBg, { backgroundColor: '#eff6ff' }]}>
+              <MaterialCommunityIcons name="thermometer" size={24} color="#3b82f6" />
+            </View>
+            <View style={styles.infoTextGroup}>
+              <Text style={styles.infoLabel}>Trạng thái nhiệt độ</Text>
+              <View style={styles.infoValueRow}>
+                <Text style={styles.infoValue}>{nhietDo}°C</Text>
+                <View style={[styles.dot, { backgroundColor: isDanger ? '#ef4444' : '#22c55e' }]} />
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.infoCard}>
+            <View style={[styles.infoIconBg, { backgroundColor: '#eff6ff' }]}>
+              <MaterialCommunityIcons name="shield-check-outline" size={24} color="#3b82f6" />
+            </View>
+            <View style={styles.infoTextGroup}>
+              <Text style={styles.infoLabel}>Hệ thống</Text>
+              <View style={styles.infoValueRow}>
+                <Text style={styles.infoValue}>{isDanger ? "Cảnh báo" : "Hoạt động tốt"}</Text>
+                <View style={[styles.dot, { backgroundColor: isDanger ? '#ef4444' : '#22c55e' }]} />
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* THANH ĐIỀU HƯỚNG / LỊCH SỬ */}
+        <View style={styles.actionBar}>
+          <View style={styles.connectionStatus}>
+            <Ionicons name="wifi" size={18} color="#22c55e" />
+            <Text style={styles.connectionText}>Kết nối: <Text style={{color: '#22c55e', fontWeight: 'bold'}}>Online</Text></Text>
+          </View>
+
+          <Link href="/history" asChild>
+            <TouchableOpacity style={styles.historyBtn}>
+              <Text style={styles.historyBtnText}>XEM LỊCH SỬ CẢNH BÁO</Text>
+            </TouchableOpacity>
+          </Link>
+          
+          <TouchableOpacity style={styles.settingsBtn} onPress={() => signOut(auth)}>
+            <Ionicons name="settings-outline" size={20} color="#64748b" />
+            <Text style={styles.settingsText}>Cài đặt</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* BẢNG ĐIỀU KHIỂN THIẾT BỊ (QUẠT & BƠM) */}
+        <View style={styles.deviceControlContainer}>
+          <View style={styles.deviceCard}>
+            <View style={styles.deviceHeader}>
+              <View style={styles.blueDot} />
+              <Text style={styles.deviceTitle}>QUẠT THÔNG GIÓ</Text>
+            </View>
+            <View style={styles.deviceImageContainer}>
+              <MaterialCommunityIcons name="fan" size={80} color={quat ? "#3b82f6" : "#94a3b8"} />
+            </View>
+            <View style={styles.deviceFooter}>
+              <TouchableOpacity onPress={() => toggleDevice('relays/dien', quat)} style={styles.powerBtn}>
+                <MaterialCommunityIcons name="power" size={28} color={quat ? "#3b82f6" : "#94a3b8"} />
+              </TouchableOpacity>
+              <Text style={[styles.powerStatusText, { color: quat ? '#3b82f6' : '#94a3b8' }]}>
+                {quat ? 'ON - Đang hoạt động' : 'OFF - Đã tắt'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.deviceCard}>
+            <View style={styles.deviceHeader}>
+              <View style={styles.blueDot} />
+              <Text style={styles.deviceTitle}>MÁY BƠM NƯỚC</Text>
+            </View>
+            <View style={styles.deviceImageContainer}>
+              <MaterialCommunityIcons name="water-pump" size={80} color={bom ? "#3b82f6" : "#94a3b8"} />
+            </View>
+            <View style={styles.deviceFooter}>
+              <TouchableOpacity onPress={() => toggleDevice('relays/bom', bom)} style={styles.powerBtn}>
+                <MaterialCommunityIcons name="power" size={28} color={bom ? "#3b82f6" : "#94a3b8"} />
+              </TouchableOpacity>
+              <Text style={[styles.powerStatusText, { color: bom ? '#3b82f6' : '#94a3b8' }]}>
+                {bom ? 'ON - Đang hoạt động' : 'OFF - Đã tắt'}
+              </Text>
+            </View>
+          </View>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+
+}
+
+const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: '#f8fafc' },
+  scrollContainer: { padding: 15, paddingBottom: 40 },
+  chartsContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15, marginTop: 10 },
+  chartCard: { flex: 1, backgroundColor: '#ffffff', borderRadius: 16, marginHorizontal: 5, paddingVertical: 20, alignItems: 'center', borderWidth: 1, borderColor: '#e2e8f0', elevation: 1 },
+  gaugeContainer: { width: 140, height: 120, alignItems: 'center', position: 'relative' },
+  gaugeTrack: { width: 130, height: 130, borderRadius: 65, borderWidth: 10, borderColor: '#f1f5f9', position: 'absolute' },
+  gaugeFill: { width: 130, height: 130, borderRadius: 65, borderWidth: 10, borderRightColor: 'transparent', borderBottomColor: 'transparent', transform: [{ rotate: '-45deg' }], position: 'absolute' },
+  gaugeContent: { position: 'absolute', top: 20, alignItems: 'center', width: '100%' },
+  chartLabel: { fontSize: 11, color: '#0f172a', fontWeight: 'bold', marginTop: 2 },
+  chartLabelSub: { fontSize: 10, color: '#64748b', marginBottom: 2 },
+  chartValue: { fontSize: 28, fontWeight: 'bold', color: '#0f172a' },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, marginTop: 5 },
+  statusText: { fontSize: 12, fontWeight: 'bold', marginLeft: 4 },
+  infoContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
+  infoCard: { flex: 1, backgroundColor: '#ffffff', borderRadius: 12, marginHorizontal: 4, padding: 10, borderWidth: 1, borderColor: '#e2e8f0', elevation: 1 },
+  infoIconBg: { alignSelf: 'flex-start', padding: 6, borderRadius: 8, marginBottom: 8 },
+  infoTextGroup: { flex: 1, justifyContent: 'flex-end' },
+  infoLabel: { fontSize: 10, color: '#64748b', marginBottom: 4 },
+  infoValueRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  infoValue: { fontSize: 12, color: '#0f172a', fontWeight: 'bold' },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  actionBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#ffffff', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 20, elevation: 1 },
+  connectionStatus: { flexDirection: 'row', alignItems: 'center' },
+  connectionText: { fontSize: 12, color: '#64748b', marginLeft: 6 },
+  historyBtn: { backgroundColor: '#3b82f6', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20 },
+  historyBtnText: { color: '#ffffff', fontSize: 12, fontWeight: 'bold' },
+  settingsBtn: { flexDirection: 'row', alignItems: 'center' },
+  settingsText: { fontSize: 12, color: '#64748b', marginLeft: 4 },
+  deviceControlContainer: { flexDirection: 'row', justifyContent: 'space-between' },
+  deviceCard: { flex: 1, backgroundColor: '#ffffff', borderRadius: 16, marginHorizontal: 5, padding: 15, borderWidth: 1, borderColor: '#e2e8f0', elevation: 1 },
+  deviceHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+  blueDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#3b82f6', marginRight: 8 },
+  deviceTitle: { fontSize: 13, fontWeight: 'bold', color: '#1e293b' },
+  deviceImageContainer: { alignItems: 'center', justifyContent: 'center', height: 100, marginBottom: 20, backgroundColor: '#f8fafc', borderRadius: 12 },
+  deviceFooter: { flexDirection: 'row', alignItems: 'center' },
+  powerBtn: { width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center', marginRight: 10, backgroundColor: '#ffffff' },
+  powerStatusText: { fontSize: 12, fontWeight: 'bold', flex: 1 }
+});
